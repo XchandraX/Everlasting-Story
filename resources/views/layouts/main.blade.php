@@ -93,7 +93,7 @@
             &copy; 2026 Everlasting Story. Generated in Cyber Reality.
         </div>
     </footer>
-
+<script src="{{ asset('assets/js/templatemo-nexus-scripts.js') }}"></script>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/glightbox/dist/css/glightbox.min.css">
 <script src="https://cdn.jsdelivr.net/gh/mcstudios/glightbox/dist/js/glightbox.min.js"></script>
 <script>
