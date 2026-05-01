@@ -109,6 +109,7 @@
 
 <body class="bg-[#020617] text-white font-mono overflow-x-hidden">
 
+    <!-- Efek Background Latar Tetap -->
     <div class="cyber-bg">
         <div class="cyber-gradient"></div>
         <div class="matrix-rain" id="matrixRain"></div>
@@ -117,20 +118,45 @@
     <div class="data-streams" id="dataStreams"></div>
     <div class="scanlines"></div>
 
+    <!-- HEADER MOBILE (Hanya muncul di HP) -->
+    <div
+        class="md:hidden flex items-center justify-between bg-black/90 p-4 border-b border-cyan-500/20 sticky top-0 z-[120]">
+        <h1 class="text-lg font-black tracking-widest uppercase m-0 p-0 leading-tight">
+            <span class="text-cyan-400">Admin</span><span class="text-pink-600">Terminal</span>
+        </h1>
+        <button id="mobileMenuBtn" class="text-cyan-500 focus:outline-none">
+            <i class="bi bi-list text-3xl"></i>
+        </button>
+    </div>
+
+    <!-- OVERLAY (Latar gelap saat menu HP terbuka) -->
+    <div id="sidebarOverlay"
+        class="fixed inset-0 bg-black/80 z-[80] hidden transition-opacity duration-300 opacity-0 md:hidden"></div>
+
     <div class="flex min-h-screen relative z-10">
-        <aside
-            class="w-72 bg-black/80 backdrop-blur-2xl border-r border-cyan-500/20 flex flex-col h-screen sticky top-0 z-[100] shadow-[10px_0_30px_rgba(0,0,0,0.5)] overflow-hidden">
+
+        <!-- SIDEBAR (Disesuaikan untuk Mobile & Desktop) -->
+        <!-- Tambahan class: fixed, transform, -translate-x-full untuk sembunyi di HP, dan md:relative md:translate-x-0 untuk tampil di Desktop -->
+        <aside id="sidebar"
+            class="w-72 bg-black/90 md:bg-black/80 backdrop-blur-2xl border-r border-cyan-500/20 flex flex-col h-screen fixed md:sticky top-0 z-[100] shadow-[10px_0_30px_rgba(0,0,0,0.5)] overflow-hidden transform -translate-x-full md:translate-x-0 transition-transform duration-300 ease-in-out">
 
             <div class="scanline-effect absolute inset-0 pointer-events-none opacity-10"></div>
 
-            <div class="p-8 border-b border-cyan-500/10 flex-none relative z-[110]">
-                <h1 class="text-xl font-black tracking-widest uppercase m-0 p-0 leading-tight">
-                    <span class="text-cyan-400">Admin</span><span class="text-pink-600">Terminal</span>
-                </h1>
-                <p class="text-[10px] text-gray-500 mt-2 uppercase tracking-tighter font-mono m-0 p-0">//
-                    System_Authenticated</p>
+            <!-- Tombol Close Menu di Sidebar (Hanya untuk HP) -->
+            <div class="p-8 border-b border-cyan-500/10 flex-none relative z-[110] flex justify-between items-center">
+                <div>
+                    <h1 class="text-xl font-black tracking-widest uppercase m-0 p-0 leading-tight">
+                        <span class="text-cyan-400">Admin</span><span class="text-pink-600">Terminal</span>
+                    </h1>
+                    <p class="text-[10px] text-gray-500 mt-2 uppercase tracking-tighter font-mono m-0 p-0">//
+                        System_Authenticated</p>
+                </div>
+                <button id="closeMenuBtn" class="md:hidden text-pink-500">
+                    <i class="bi bi-x-lg text-xl"></i>
+                </button>
             </div>
 
+            <!-- Navigasi Sidebar -->
             <nav
                 class="flex-grow p-6 space-y-2 overflow-y-auto no-scrollbar relative z-[110] bg-transparent border-none">
                 <a href="{{ route('admin.dashboard') }}"
@@ -163,6 +189,7 @@
                 <p class="text-[9px] text-cyan-500 font-mono mb-3 tracking-[0.2em] uppercase opacity-70">
                     Visual_Link_Active</p>
 
+                <!-- Animasi dan Status -->
                 <div class="flex items-end gap-1 h-8 mb-4">
                     <div class="w-1 bg-cyan-500 animate-[pulse_1s_infinite_100ms]" style="height: 40%"></div>
                     <div class="w-1 bg-pink-500 animate-[pulse_1s_infinite_300ms]" style="height: 80%"></div>
@@ -184,7 +211,9 @@
             </div>
         </aside>
 
-        <main class="flex-1 overflow-y-auto p-10 bg-black/20">
+        <!-- KONTEN UTAMA -->
+        <!-- Tambahan p-4 md:p-10 agar jarak di HP tidak terlalu lebar -->
+        <main class="flex-1 overflow-y-auto p-4 md:p-10 bg-black/20 w-full overflow-x-hidden">
             @if (session('success'))
                 <div id="success-alert"
                     class="mb-6 p-4 bg-cyan-500/10 border border-cyan-500/50 text-cyan-400 rounded-xl flex items-center justify-between group shadow-[0_0_20px_rgba(6,182,212,0.1)]">
@@ -206,7 +235,31 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+
+    <!-- SCRIPT BARU UNTUK MENGATUR SIDEBAR MOBILE -->
     <script>
+        const mobileMenuBtn = document.getElementById('mobileMenuBtn');
+        const closeMenuBtn = document.getElementById('closeMenuBtn');
+        const sidebar = document.getElementById('sidebar');
+        const overlay = document.getElementById('sidebarOverlay');
+
+        function toggleMenu() {
+            const isClosed = sidebar.classList.contains('-translate-x-full');
+            if (isClosed) {
+                sidebar.classList.remove('-translate-x-full');
+                overlay.classList.remove('hidden');
+                setTimeout(() => overlay.classList.remove('opacity-0'), 10);
+            } else {
+                sidebar.classList.add('-translate-x-full');
+                overlay.classList.add('opacity-0');
+                setTimeout(() => overlay.classList.add('hidden'), 300);
+            }
+        }
+
+        mobileMenuBtn.addEventListener('click', toggleMenu);
+        closeMenuBtn.addEventListener('click', toggleMenu);
+        overlay.addEventListener('click', toggleMenu);
+
         document.addEventListener('click', function(e) {
             if (e.target.classList.contains('delete-btn') || e.target.closest('.delete-btn')) {
                 const button = e.target.classList.contains('delete-btn') ? e.target : e.target.closest(
