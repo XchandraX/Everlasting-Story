@@ -16,21 +16,26 @@
                 </button>
             </div>
 
-            {{-- ✅ TOMBOL DOWNLOAD ALL --}}
-            <div class="mt-4 mb-6 flex justify-center">
-                <a href="{{ route('categories.download', $category->id) }}?filter={{ request('filter', 'image') }}"
-                    id="download-all-btn" class="download-btn" onclick="return confirmDownload(this)">
-                    <i class="bi bi-cloud-arrow-down-fill"></i>
-                    <span id="download-label">
-                        Download All {{ $filter === 'video' ? 'Videos' : 'Images' }}
-                    </span>
+            {{-- ✅ TOMBOL DOWNLOAD (2 opsi) --}}
+            <div class="flex flex-wrap gap-3 justify-center mt-6 mb-4">
+                {{-- Download halaman ini saja --}}
+                <a href="{{ route('categories.download.page', $category->id) }}?filter={{ $filter }}&page={{ $images->currentPage() }}"
+                    class="download-btn" onclick="return confirm('Download {{ $images->count() }} file di halaman ini?')">
+                    <i class="bi bi-download"></i>
+                    Halaman Ini ({{ $images->count() }} file)
+                </a>
+
+                {{-- Download semua (async + progress bar) --}}
+                <a href="#" id="download-all-btn" class="download-btn" onclick="return confirmDownload(this)">
+                    <i class="bi bi-cloud-arrow-down"></i>
+                    <span id="download-label">Semua {{ $filter === 'video' ? 'Videos' : 'Images' }}</span>
                     <span class="text-[10px] opacity-80 font-mono">
                         ({{ $totalCount }} file · {{ format_bytes($totalSize) }})
                     </span>
-                    <i class="bi bi-file-earmark-zip-fill"></i>
                 </a>
             </div>
 
+            {{-- Progress bar --}}
             <div id="download-progress" class="hidden mt-3 w-full max-w-md mx-auto">
                 <div class="w-full h-2 bg-slate-800 rounded-full overflow-hidden border border-cyan-500/30">
                     <div id="download-progress-bar"
@@ -39,6 +44,8 @@
                 </div>
                 <p id="download-progress-text" class="text-[10px] text-cyan-400 font-mono mt-2 text-center">0%</p>
             </div>
+
+
         </div>
 
         {{-- GRID MODE --}}
@@ -380,7 +387,7 @@
                 const filter = new URLSearchParams(window.location.search).get('filter') || 'image';
                 const ok = confirm(
                     `Download semua ${filter === 'video' ? 'video' : 'foto'}?\n\nProses berjalan di background.`
-                    );
+                );
                 if (!ok) return false;
 
                 el.classList.add('loading');

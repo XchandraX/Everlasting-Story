@@ -1,10 +1,11 @@
 <?php
 
-use Illuminate\Support\Facades\Route;
-use App\Http\Controllers\PublicController;
-use App\Http\Controllers\AuthController;
-use App\Http\Controllers\Admin\ImageController;
 use App\Http\Controllers\Admin\CategoryController;
+use App\Http\Controllers\Admin\ImageController;
+use App\Http\Controllers\AuthController;
+use App\Http\Controllers\PublicController;
+use App\Models\Kategori;
+use Illuminate\Support\Facades\Route;
 
 // --- PUBLIC ROUTES ---
 Route::get('/', [PublicController::class, 'index'])->name('home');
@@ -17,6 +18,8 @@ Route::get('/download/progress/{token}', [PublicController::class, 'downloadProg
     ->name('categories.download.progress');
 Route::get('/download/file/{token}', [PublicController::class, 'downloadFile'])
     ->name('categories.download.file');
+Route::get('/category/{id}/download/page', [PublicController::class, 'downloadPage'])
+    ->name('categories.download.page');
 Route::get('/search', [PublicController::class, 'search'])->name('search');
 
 // --- AUTH ROUTES ---
@@ -37,9 +40,10 @@ Route::middleware(['auth'])->prefix('admin')->name('admin.')->group(function () 
 Route::get('/keep-alive', function () {
     try {
         // Lakukan query sederhana, misal ambil 1 data dari kategori
-        \App\Models\Kategori::first();
+        Kategori::first();
+
         return response()->json(['status' => 'alive']);
-    } catch (\Exception $e) {
+    } catch (Exception $e) {
         return response()->json(['status' => 'error'], 500);
     }
 });
