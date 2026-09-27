@@ -130,7 +130,7 @@ class PublicController extends Controller
         set_time_limit(0);
         @ini_set('memory_limit', '1024M');
 
-        $tempDir = storage_path('app/temp');
+        $tempDir = sys_get_temp_dir() . '/everlasting_zip';
         if (! is_dir($tempDir)) {
             mkdir($tempDir, 0755, true);
         }
