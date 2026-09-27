@@ -18,23 +18,26 @@
                 </button>
             </div>
 
-            {{-- ✅ TOMBOL DOWNLOAD (2 opsi) --}}
+            {{-- ✅ TOMBOL DOWNLOAD (CLIENT-SIDE ZIP) --}}
             <div class="flex flex-wrap gap-3 justify-center mt-6 mb-4">
-                {{-- Download halaman ini saja --}}
-                <a href="{{ route('categories.download.page', $category->id) }}?filter={{ $filter }}&page={{ $images->currentPage() }}"
-                    class="download-btn" onclick="return confirm('Download {{ $images->count() }} file di halaman ini?')">
+                {{-- Download halaman ini saja (client-side) --}}
+                <button type="button" class="download-btn"
+                    onclick="downloadPageClient('{{ $filter }}', {{ $images->currentPage() }})">
                     <i class="bi bi-download"></i>
                     Halaman Ini ({{ $images->count() }} file)
-                </a>
+                </button>
 
-                {{-- Download semua (async + progress bar) --}}
-                <a href="#" id="download-all-btn" class="download-btn" onclick="return confirmDownload(this)">
+                {{-- Download semua (client-side) --}}
+                <button type="button" id="download-all-btn" class="download-btn"
+                    onclick="downloadAllClient('{{ $filter }}')">
                     <i class="bi bi-cloud-arrow-down"></i>
-                    <span id="download-label">Semua {{ $filter === 'video' ? 'Videos' : 'Images' }}</span>
+                    <span id="download-label">
+                        Semua {{ $filter === 'video' ? 'Videos' : 'Images' }}
+                    </span>
                     <span class="text-[10px] opacity-80 font-mono">
                         ({{ $totalCount }} file · {{ format_bytes($totalSize) }})
                     </span>
-                </a>
+                </button>
             </div>
 
             {{-- Progress bar --}}
