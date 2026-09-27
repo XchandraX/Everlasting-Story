@@ -1,5 +1,41 @@
 @extends('layouts.main')
 @section('content')
+    {{-- ✅ MODAL DAFTAR BATCH --}}
+    <div id="batch-modal"
+        class="hidden fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+        <div
+            class="bg-slate-900 border border-cyan-500/30 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
+
+            {{-- Header --}}
+            <div class="flex items-center justify-between p-5 border-b border-white/10">
+                <div>
+                    <h3 class="text-lg font-bold text-cyan-400 font-mono">📦 DAFTAR BATCH DOWNLOAD</h3>
+                    <p id="batch-summary" class="text-xs text-gray-400 mt-1 font-mono"></p>
+                </div>
+                <button onclick="closeBatchModal()"
+                    class="w-9 h-9 rounded-full bg-red-500/20 hover:bg-red-500/40 text-red-400 flex items-center justify-center transition">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+
+            {{-- List Batch --}}
+            <div id="batch-list" class="flex-1 overflow-y-auto p-4 space-y-2">
+                {{-- Diisi via JS --}}
+            </div>
+
+            {{-- Footer --}}
+            <div class="p-4 border-t border-white/10 flex justify-between items-center gap-3">
+                <p class="text-[10px] text-gray-500 font-mono">
+                    ⚠️ Klik "Download" per batch. Browser mungkin minta izin multiple download.
+                </p>
+                <button onclick="closeBatchModal()"
+                    class="px-4 py-2 rounded-full bg-slate-800 hover:bg-slate-700 text-gray-300 text-xs font-bold uppercase tracking-wider transition">
+                    Tutup
+                </button>
+            </div>
+        </div>
+    </div>
+
     <div class="container mx-auto px-4 sm:px-6 py-8 md:py-12">
         <div class="mb-8 text-center">
             <h1 class="text-2xl md:text-4xl font-bold text-white tracking-tight">{{ $category->nama_kategori }}</h1>
@@ -46,7 +82,6 @@
                 </div>
                 <p id="download-progress-text" class="text-[10px] text-cyan-400 font-mono mt-2 text-center">0%</p>
             </div>
-
 
         </div>
 
@@ -280,6 +315,9 @@
     </style>
 
     <script>
+        // Flag global untuk cegah user tutup tab saat download
+        let isDownloading = false;
+
         document.addEventListener('DOMContentLoaded', function() {
             // ============================================================
             // GLIGHTBOX
@@ -376,8 +414,55 @@
         });
 
         // ============================================================
-        // CLIENT-SIDE ZIP DOWNLOAD
+        // WARNING KALAU USER COBA TUTUP TAB
         // ============================================================
+        window.addEventListener('beforeunload', function(e) {
+            if (isDownloading) {
+                e.preventDefault();
+                e.returnValue = 'Download masih berjalan. Yakin mau keluar?';
+                return e.returnValue;
+            }
+        });
+
+        // ============================================================
+        // CLIENT-SIDE ZIP DOWNLOAD (DENGAN SAFETY)
+        // ============================================================
+
+        function splitIntoBatches(files, filter) {
+            const maxFiles = filter === 'video' ? 20 : 50;
+            const maxBytes = 100 * 1024 * 1024;
+
+            const batches = [];
+            let current = [];
+            let currentSize = 0;
+
+            for (const file of files) {
+                const fileSize = file.size || 0;
+
+                if (fileSize > maxBytes) {
+                    if (current.length > 0) {
+                        batches.push(current);
+                        current = [];
+                        currentSize = 0;
+                    }
+                    batches.push([file]);
+                    continue;
+                }
+
+                if (current.length >= maxFiles || currentSize + fileSize > maxBytes) {
+                    batches.push(current);
+                    current = [];
+                    currentSize = 0;
+                }
+
+                current.push(file);
+                currentSize += fileSize;
+            }
+
+            if (current.length > 0) batches.push(current);
+
+            return batches;
+        }
 
         async function downloadPageClient(filter, page) {
             const ok = confirm(
@@ -390,16 +475,203 @@
             await runClientZip(url, `Halaman-${page}`);
         }
 
-        async function downloadAllClient(filter) {
-            const ok = confirm(
-                `Download semua ${filter === 'video' ? 'video' : 'foto'}?\n\n` +
-                `ZIP dibuat di browser, bukan di server.\n` +
-                `Jangan tutup tab ini sampai selesai.`
-            );
-            if (!ok) return;
+        // ============================================================
+        // DOWNLOAD ALL → Tampilkan Modal Daftar Batch
+        // ============================================================
 
-            const url = `{{ route('categories.download.list', $category->id) }}?filter=${filter}`;
-            await runClientZip(url, 'Semua');
+        async function downloadAllClient(filter) {
+            try {
+                const url = `{{ route('categories.download.list', $category->id) }}?filter=${filter}`;
+                const res = await fetch(url);
+                if (!res.ok) throw new Error('Gagal ambil daftar');
+
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+
+                const files = data.files || [];
+                if (files.length === 0) {
+                    alert('Tidak ada file');
+                    return;
+                }
+
+                const batches = splitIntoBatches(files, filter);
+
+                // Simpan global untuk akses di tombol
+                window.__currentBatches = batches;
+                window.__currentFilter = filter;
+                window.__currentCategorySlug = '{{ Str::slug($category->nama_kategori) }}';
+
+                // Render modal
+                renderBatchModal(batches, filter, data.total_size);
+
+            } catch (err) {
+                alert('❌ ' + err.message);
+            }
+        }
+
+        // ============================================================
+        // MODAL: RENDER DAFTAR BATCH
+        // ============================================================
+
+        function renderBatchModal(batches, filter, totalSize) {
+            const modal = document.getElementById('batch-modal');
+            const list = document.getElementById('batch-list');
+            const summary = document.getElementById('batch-summary');
+
+            const totalFiles = batches.reduce((sum, b) => sum + b.length, 0);
+            const totalMB = (totalSize / 1024 / 1024).toFixed(1);
+            const maxPerBatch = filter === 'video' ? 20 : 50;
+
+            summary.textContent =
+                `${totalFiles} file · ${totalMB} MB · ${batches.length} batch (max ${maxPerBatch} file atau 100 MB per batch)`;
+
+            list.innerHTML = '';
+
+            batches.forEach((batch, i) => {
+                const batchSize = batch.reduce((s, f) => s + (f.size || 0), 0);
+                const batchMB = (batchSize / 1024 / 1024).toFixed(1);
+
+                const row = document.createElement('div');
+                row.className =
+                    'flex items-center justify-between p-3 rounded-xl bg-slate-800/50 border border-white/10 hover:border-cyan-500/50 transition group';
+
+                row.innerHTML = `
+                <div class="flex items-center gap-3 flex-1 min-w-0">
+                    <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-cyan-500 to-purple-500 flex items-center justify-center text-black font-bold text-sm shrink-0">
+                        ${i + 1}
+                    </div>
+                    <div class="flex-1 min-w-0">
+                        <p class="text-sm font-bold text-white font-mono">Batch ${i + 1} / ${batches.length}</p>
+                        <p class="text-[10px] text-gray-400 font-mono mt-0.5">
+                            ${batch.length} file · ${batchMB} MB
+                        </p>
+                    </div>
+                </div>
+                <button
+                    onclick="downloadBatch(${i})"
+                    id="batch-btn-${i}"
+                    class="px-4 py-2 rounded-full bg-gradient-to-r from-green-500 to-cyan-500 text-black text-xs font-bold uppercase tracking-wider hover:scale-105 transition shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                    <i class="bi bi-download"></i> Download
+                </button>
+            `;
+
+                list.appendChild(row);
+            });
+
+            modal.classList.remove('hidden');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeBatchModal() {
+            const modal = document.getElementById('batch-modal');
+            modal.classList.add('hidden');
+            document.body.style.overflow = '';
+        }
+
+        // ============================================================
+        // DOWNLOAD 1 BATCH (dipanggil dari tombol batch)
+        // ============================================================
+
+        async function downloadBatch(index) {
+            const batches = window.__currentBatches || [];
+            const filter = window.__currentFilter || 'image';
+            const slug = window.__currentCategorySlug || 'download';
+
+            const batch = batches[index];
+            if (!batch) return;
+
+            const btn = document.getElementById(`batch-btn-${index}`);
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i class="bi bi-hourglass-split"></i> Proses...';
+            }
+
+            isDownloading = true;
+
+            const batchNum = index + 1;
+            const totalBatches = batches.length;
+
+            try {
+                const zip = new JSZip();
+                let done = 0;
+                let failed = 0;
+
+                const batchSizeMB = batch.reduce((s, f) => s + (f.size || 0), 0) / 1024 / 1024;
+                const avgSizeMB = batchSizeMB / batch.length;
+                const concurrency = avgSizeMB > 5 ? 3 : 6;
+
+                const queue = [...batch];
+
+                async function worker() {
+                    while (queue.length > 0) {
+                        const file = queue.shift();
+                        if (!file) break;
+
+                        let success = false;
+                        for (let attempt = 1; attempt <= 3; attempt++) {
+                            try {
+                                const res = await fetch(file.url, {
+                                    mode: 'cors'
+                                });
+                                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                                const blob = await res.blob();
+                                zip.file(file.name, blob);
+                                success = true;
+                                break;
+                            } catch (e) {
+                                if (attempt < 3) await new Promise(r => setTimeout(r, 1000 * attempt));
+                            }
+                        }
+                        if (!success) failed++;
+
+                        done++;
+                        if (btn) {
+                            btn.innerHTML = `<i class="bi bi-arrow-down-circle"></i> ${done}/${batch.length}`;
+                        }
+                    }
+                }
+
+                await Promise.all(Array.from({
+                    length: concurrency
+                }, () => worker()));
+
+                if (btn) btn.innerHTML = '<i class="bi bi-file-zip"></i> ZIP...';
+
+                const zipBlob = await zip.generateAsync({
+                    type: 'blob',
+                    compression: 'STORE'
+                });
+
+                const blobUrl = URL.createObjectURL(zipBlob);
+                const a = document.createElement('a');
+                a.href = blobUrl;
+                a.download = `${slug}-${filter}-part${batchNum}of${totalBatches}-${Date.now()}.zip`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+
+                if (btn) {
+                    btn.disabled = true;
+                    btn.className =
+                        'px-4 py-2 rounded-full bg-green-500/20 text-green-400 text-xs font-bold uppercase tracking-wider shrink-0';
+                    btn.innerHTML = failed > 0 ?
+                        `<i class="bi bi-check"></i> Selesai (${failed} gagal)` :
+                        '<i class="bi bi-check"></i> Selesai';
+                }
+
+                isDownloading = false;
+
+            } catch (err) {
+                console.error(err);
+                isDownloading = false;
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="bi bi-arrow-clockwise"></i> Coba Lagi';
+                }
+                alert('❌ ' + err.message);
+            }
         }
 
         async function runClientZip(listUrl, label) {
@@ -414,6 +686,7 @@
             bar.style.width = '0%';
 
             try {
+                // 1. Ambil daftar URL dari server
                 const listRes = await fetch(listUrl);
                 if (!listRes.ok) throw new Error(`Gagal ambil daftar (HTTP ${listRes.status})`);
 
@@ -422,6 +695,7 @@
 
                 const files = data.files || [];
                 const total = files.length;
+                const totalMB = (data.total_size || 0) / 1024 / 1024;
 
                 if (total === 0) {
                     txt.textContent = '❌ Tidak ada file';
@@ -429,33 +703,85 @@
                     return;
                 }
 
+                // ============================================================
+                // ✅ WARNING 1: Kalau total > 300 MB, konfirmasi ekstra
+                // ============================================================
+                if (totalMB > 300) {
+                    const ok = confirm(
+                        `⚠️ PERHATIAN\n\n` +
+                        `Total: ${totalMB.toFixed(0)} MB (${total} file)\n\n` +
+                        `Proses ini butuh RAM besar di browser:\n` +
+                        `• Di HP bisa crash\n` +
+                        `• Jangan tutup tab / refresh\n\n` +
+                        `Disarankan pakai tombol "Halaman Ini" (12 file) per klik.\n\n` +
+                        `Lanjutkan?`
+                    );
+                    if (!ok) {
+                        if (el) el.classList.remove('loading');
+                        wrap.classList.add('hidden');
+                        return;
+                    }
+                }
+
+                // ============================================================
+                // ✅ WARNING 2: Aktifkan beforeunload
+                // ============================================================
+                isDownloading = true;
+
                 const zip = new JSZip();
                 let done = 0;
                 let failed = 0;
+                let failedFiles = [];
                 const queue = [...files];
-                const concurrency = 6;
+
+                // ============================================================
+                // ✅ WARNING 3: Concurrency adaptif (file besar → lebih sedikit)
+                // ============================================================
+                const avgSizeMB = totalMB / total;
+                const concurrency = avgSizeMB > 5 ? 3 : 6;
 
                 async function worker() {
                     while (queue.length > 0) {
                         const file = queue.shift();
                         if (!file) break;
 
-                        try {
-                            const res = await fetch(file.url, {
-                                mode: 'cors'
-                            });
-                            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                            const blob = await res.blob();
-                            zip.file(file.name, blob);
-                        } catch (e) {
+                        // ============================================================
+                        // ✅ WARNING 4: Retry otomatis 3x per file
+                        // ============================================================
+                        let success = false;
+                        let lastError = '';
+
+                        for (let attempt = 1; attempt <= 3; attempt++) {
+                            try {
+                                const res = await fetch(file.url, {
+                                    mode: 'cors'
+                                });
+                                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                                const blob = await res.blob();
+                                zip.file(file.name, blob);
+                                success = true;
+                                break;
+                            } catch (e) {
+                                lastError = e.message;
+                                if (attempt < 3) {
+                                    // Jeda makin lama tiap attempt: 1s, 2s
+                                    await new Promise(r => setTimeout(r, 1000 * attempt));
+                                }
+                            }
+                        }
+
+                        if (!success) {
                             failed++;
-                            console.warn('Gagal:', file.name, e.message);
+                            failedFiles.push(file.name);
+                            console.warn(`Gagal permanen: ${file.name} - ${lastError}`);
                         }
 
                         done++;
                         const percent = (done / total) * 90;
                         bar.style.width = percent + '%';
-                        txt.textContent = `${done}/${total} file (${percent.toFixed(0)}%)`;
+
+                        const failInfo = failed > 0 ? ` · ${failed} gagal` : '';
+                        txt.textContent = `${done}/${total} file (${percent.toFixed(0)}%)${failInfo}`;
                     }
                 }
 
@@ -463,6 +789,7 @@
                     length: concurrency
                 }, () => worker()));
 
+                // 3. Generate ZIP di browser
                 txt.textContent = 'Membuat ZIP...';
                 bar.style.width = '92%';
 
@@ -477,6 +804,7 @@
                     }
                 );
 
+                // 4. Trigger download
                 const blobUrl = URL.createObjectURL(zipBlob);
                 const a = document.createElement('a');
                 a.href = blobUrl;
@@ -484,12 +812,34 @@
                 document.body.appendChild(a);
                 a.click();
                 a.remove();
-                URL.revokeObjectURL(blobUrl);
+
+                // Cleanup blob URL setelah 10 detik
+                setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+
+                // ============================================================
+                // SELESAI
+                // ============================================================
+                isDownloading = false;
 
                 bar.style.width = '100%';
-                txt.textContent = failed > 0 ?
-                    `✅ Selesai! (${failed} file gagal)` :
-                    `✅ Selesai! (${total} file)`;
+
+                if (failed === 0) {
+                    txt.textContent = `✅ Selesai! (${total} file)`;
+                } else {
+                    txt.textContent = `⚠️ Selesai dengan ${failed} file gagal dari ${total}`;
+                    console.warn('File gagal:', failedFiles);
+
+                    // Tampilkan daftar file gagal (10 pertama)
+                    setTimeout(() => {
+                        const sample = failedFiles.slice(0, 10).join('\n');
+                        alert(
+                            `${failed} file gagal di-download:\n\n${sample}` +
+                            (failedFiles.length > 10 ? `\n... dan ${failedFiles.length - 10} lainnya` :
+                                '') +
+                            `\n\nCek konsol browser (F12) untuk daftar lengkap.`
+                        );
+                    }, 500);
+                }
 
                 setTimeout(() => {
                     wrap.classList.add('hidden');
@@ -499,6 +849,7 @@
 
             } catch (err) {
                 console.error(err);
+                isDownloading = false;
                 txt.textContent = '❌ ' + err.message;
                 if (el) el.classList.remove('loading');
             }
