@@ -5,6 +5,10 @@ namespace App\Http\Controllers;
 use App\Models\Image;
 use App\Models\Kategori;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Str;
+use ZipArchive;
+
 
 class PublicController extends Controller
 {
@@ -55,5 +59,104 @@ class PublicController extends Controller
             ->paginate(15);
 
         return view('public.search_results', compact('images', 'keyword'));
+    }
+
+        /**
+     * Download semua media di kategori tertentu sebagai ZIP
+     */
+    public function downloadCategory(Request $request, $id)
+    {
+        set_time_limit(0);
+        @ini_set('memory_limit', '512M');
+
+        $category = Kategori::findOrFail($id);
+        $filter   = $request->get('filter', 'image'); // image | video
+
+        $media = Image::where('kategori_id', $id)
+            ->where('media_type', $filter)
+            ->latest()
+            ->get();
+
+        if ($media->isEmpty()) {
+            return back()->with('error', 'Tidak ada file untuk diunduh.');
+        }
+
+        // Folder temp
+        $tempDir = storage_path('app/temp');
+        if (!is_dir($tempDir)) {
+            mkdir($tempDir, 0755, true);
+        }
+
+        $zipName = Str::slug($category->nama_kategori)
+                 . '-' . $filter
+                 . '-' . now()->format('Ymd_His')
+                 . '.zip';
+        $zipPath = $tempDir . DIRECTORY_SEPARATOR . $zipName;
+
+        $zip = new ZipArchive();
+        if ($zip->open($zipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+            abort(500, 'Gagal membuat file ZIP.');
+        }
+
+        $tempFiles = [];
+        $counter   = 1;
+
+        foreach ($media as $item) {
+            $tmpFile = null;
+            try {
+                // Resolve URL: dukung Cloudinary full URL ATAU path storage lokal
+                $url = $this->resolveMediaUrl($item->file_path);
+
+                $tmpFile = tempnam(sys_get_temp_dir(), 'media_');
+
+                $response = Http::timeout(300)->get($url);
+                if (!$response->successful()) {
+                    @unlink($tmpFile);
+                    continue;
+                }
+                file_put_contents($tmpFile, $response->body());
+
+                // Ekstensi file
+                $ext = pathinfo(parse_url($url, PHP_URL_PATH), PATHINFO_EXTENSION);
+                if (!$ext) {
+                    $ext = $filter === 'video' ? 'mp4' : 'jpg';
+                }
+
+                $safeTitle = Str::slug($item->title ?: 'file') ?: 'file';
+                $fileName  = sprintf('%03d_%s.%s', $counter, $safeTitle, $ext);
+
+                $zip->addFile($tmpFile, $fileName);
+                $tempFiles[] = $tmpFile;
+                $counter++;
+            } catch (\Throwable $e) {
+                if ($tmpFile && file_exists($tmpFile)) {
+                    @unlink($tmpFile);
+                }
+                continue;
+            }
+        }
+
+        $zip->close();
+
+        foreach ($tempFiles as $tmp) {
+            @unlink($tmp);
+        }
+
+        return response()
+            ->download($zipPath, $zipName, ['Content-Type' => 'application/zip'])
+            ->deleteFileAfterSend(true);
+    }
+
+    /**
+     * Helper: bisa handle Cloudinary URL atau path storage lokal
+     */
+    private function resolveMediaUrl(string $path): string
+    {
+        // Kalau sudah full URL (http/https), pakai langsung
+        if (preg_match('/^https?:\/\//i', $path)) {
+            return $path;
+        }
+        // Kalau path lokal, gunakan asset storage
+        return asset('storage/' . ltrim($path, '/'));
     }
 }

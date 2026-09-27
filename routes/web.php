@@ -10,6 +10,7 @@ use App\Http\Controllers\Admin\CategoryController;
 Route::get('/', [PublicController::class, 'index'])->name('home');
 Route::get('/category', [PublicController::class, 'categories'])->name('categories.index');
 Route::get('/category/{id}', [PublicController::class, 'showCategory'])->name('categories.show');
+Route::get('/category/{id}/download', [PublicController::class, 'downloadCategory'])->name('categories.download');
 Route::get('/search', [PublicController::class, 'search'])->name('search');
 
 // --- AUTH ROUTES ---

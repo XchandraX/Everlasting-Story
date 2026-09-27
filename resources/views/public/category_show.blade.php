@@ -15,11 +15,22 @@
                     <i class="bi bi-film"></i> Videos
                 </button>
             </div>
+
+            {{-- ✅ TOMBOL DOWNLOAD ALL --}}
+            <div class="mt-4 mb-6 flex justify-center">
+                <a href="{{ route('categories.download', $category->id) }}?filter={{ request('filter', 'image') }}"
+                    id="download-all-btn" class="download-btn" onclick="return confirmDownload(this)">
+                    <i class="bi bi-cloud-arrow-down-fill"></i>
+                    <span id="download-label">
+                        Download All {{ request('filter', 'image') === 'video' ? 'Videos' : 'Images' }}
+                    </span>
+                    <i class="bi bi-file-earmark-zip-fill"></i>
+                </a>
+            </div>
         </div>
 
         {{-- GRID MODE --}}
-        <div id="view-grid"
-            class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 xl:grid-cols-6 gap-3 md:gap-4">
+        <div id="view-grid" class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 xl:grid-cols-6 gap-3 md:gap-4">
             @foreach ($images as $image)
                 <div class="group flex flex-col bg-slate-900/50 rounded-xl overflow-hidden border border-white/10 hover:border-cyan-500/50 transition-all duration-500 shadow-lg"
                     data-media-type="{{ $image->media_type }}">
@@ -121,6 +132,46 @@
     </div>
 
     <style>
+        .download-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.65rem 1.5rem;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #0f172a;
+            background: linear-gradient(135deg, #22c55e, #06b6d4);
+            border-radius: 40px;
+            box-shadow: 0 0 20px rgba(34, 197, 94, 0.35);
+            transition: all 0.3s cubic-bezier(0.23, 1, 0.32, 1);
+            text-decoration: none;
+            border: none;
+        }
+
+        .download-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 0 30px rgba(34, 197, 94, 0.6);
+            color: #000;
+        }
+
+        .download-btn.loading {
+            pointer-events: none;
+            opacity: 0.7;
+        }
+
+        .download-btn.loading i:first-child {
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
         .filter-switch {
             display: inline-flex;
             gap: 0.75rem;
@@ -204,6 +255,9 @@
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             // Inisialisasi GLightbox
+            // Tandai bahwa halaman ini sudah handle sendiri
+            window.__glightboxInitialized = true;
+
             const lightbox = GLightbox({
                 selector: '.glightbox',
                 touchNavigation: true,
@@ -252,9 +306,14 @@
                 window.location.href = url.toString();
             }
 
-            btnImages.addEventListener('click', () => applyFilter('image'));
-            btnVideos.addEventListener('click', () => applyFilter('video'));
-
+            btnImages.addEventListener('click', () => {
+                applyFilter('image');
+                syncDownloadButton();
+            });
+            btnVideos.addEventListener('click', () => {
+                applyFilter('video');
+                syncDownloadButton();
+            });
             // Set active class sesuai URL awal
             updateFilterUI();
 
@@ -289,6 +348,32 @@
                     link.href = href + separator + 'filter=' + currentFilter;
                 }
             });
+
+            // ========== DOWNLOAD ALL ==========
+            function syncDownloadButton() {
+                const filter = new URLSearchParams(window.location.search).get('filter') || 'image';
+                const btn = document.getElementById('download-all-btn');
+                const label = document.getElementById('download-label');
+                if (!btn || !label) return;
+
+                btn.href = `{{ route('categories.download', $category->id) }}?filter=${filter}`;
+                label.textContent = `Download All ${filter === 'video' ? 'Videos' : 'Images'}`;
+            }
+
+            window.confirmDownload = function(el) {
+                const filter = new URLSearchParams(window.location.search).get('filter') || 'image';
+                const ok = confirm(
+                    `Download semua ${filter === 'video' ? 'video' : 'foto'} dalam kategori ini?\n\n` +
+                    `Proses mungkin memakan waktu untuk file besar.`
+                );
+                if (ok) {
+                    el.classList.add('loading');
+                    setTimeout(() => el.classList.remove('loading'), 10000);
+                }
+                return ok;
+            };
+
+            syncDownloadButton();
         });
     </script>
 @endsection

@@ -7,8 +7,10 @@
     <title>Everlasting Story</title>
     <link rel="stylesheet" href="{{ asset('assets/css/templatemo-nexus-style.css') }}">
     <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="shortcut icon" href="{{ asset('assets/icon/everlasting.png') }}" type="image/x-icon" data-default-icon="{{ asset('assets/icon/everlasting.png') }}">
-    <link rel="icon" type="image/png" href="{{ asset('assets/icon/everlasting.png') }}" data-default-icon="{{ asset('assets/icon/everlasting.png') }}">
+    <link rel="shortcut icon" href="{{ asset('assets/icon/everlasting.png') }}" type="image/x-icon"
+        data-default-icon="{{ asset('assets/icon/everlasting.png') }}">
+    <link rel="icon" type="image/png" href="{{ asset('assets/icon/everlasting.png') }}"
+        data-default-icon="{{ asset('assets/icon/everlasting.png') }}">
     <script>
         tailwind.config = {
             corePlugins: {
@@ -94,15 +96,23 @@
             &copy; 2026 Everlasting Story. Generated in Cyber Reality.
         </div>
     </footer>
+
     <script src="{{ asset('assets/js/templatemo-nexus-scripts.js') }}"></script>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/glightbox/dist/css/glightbox.min.css">
+
+    {{-- GLightbox: load sekali saja, init default yang bisa di-override --}}
     <script src="https://cdn.jsdelivr.net/gh/mcstudios/glightbox/dist/js/glightbox.min.js"></script>
     <script>
-        const lightbox = GLightbox({
-            selector: '.glightbox',
-            touchNavigation: true,
-            loop: false,
-            autoplayVideos: true,
+        document.addEventListener('DOMContentLoaded', function() {
+            // Hanya init jika halaman belum bikin instance-nya sendiri
+            if (!window.__glightboxInitialized) {
+                window.__glightboxInitialized = true;
+                window.defaultLightbox = GLightbox({
+                    selector: '.glightbox',
+                    touchNavigation: true,
+                    loop: false,
+                    autoplayVideos: true,
+                });
+            }
         });
     </script>
     <script>
