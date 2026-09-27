@@ -1,5 +1,7 @@
 @extends('layouts.main')
-
+@push('scripts')
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+@endpush
 @section('content')
     <div class="container mx-auto px-4 sm:px-6 py-8 md:py-12">
         <div class="mb-8 text-center">
@@ -386,7 +388,9 @@
             window.confirmDownload = async function(el) {
                 const filter = new URLSearchParams(window.location.search).get('filter') || 'image';
                 const ok = confirm(
-                    `Download semua ${filter === 'video' ? 'video' : 'foto'}?\n\nProses berjalan di background.`
+                    `Download semua ${filter === 'video' ? 'video' : 'foto'} di browser?\n\n` +
+                    `File akan di-ZIP di browser, bukan di server.\n` +
+                    `Jangan tutup tab ini sampai selesai.`
                 );
                 if (!ok) return false;
 
@@ -395,47 +399,103 @@
                 const bar = document.getElementById('download-progress-bar');
                 const txt = document.getElementById('download-progress-text');
                 wrap.classList.remove('hidden');
-                txt.textContent = 'Memulai...';
+                txt.textContent = 'Mengambil daftar file...';
 
-                // 1. Trigger job
-                const startUrl = `{{ route('categories.download.start', $category->id) }}`;
-                const {
-                    token,
-                    poll
-                } = await fetch(startUrl, {
-                    method: 'POST',
-                    headers: {
-                        'X-CSRF-TOKEN': '{{ csrf_token() }}',
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        filter
-                    })
-                }).then(r => r.json());
+                try {
+                    // 1. Ambil daftar URL dari server (JSON kecil)
+                    const listUrl =
+                        `{{ route('categories.download.list', $category->id) }}?filter=${filter}`;
+                    const listRes = await fetch(listUrl);
+                    if (!listRes.ok) throw new Error('Gagal ambil daftar file');
 
-                // 2. Poll
-                const interval = setInterval(async () => {
-                    const data = await fetch(poll).then(r => r.json());
+                    const data = await listRes.json();
+                    const files = data.files;
+                    const total = files.length;
 
-                    if (data.status === 'processing' || data.status === 'queued') {
-                        bar.style.width = (data.progress || 0) + '%';
-                        txt.textContent =
-                            `${data.progress || 0}% · ${data.current || 0}/${data.total || 0} file`;
-                    } else if (data.status === 'done') {
-                        clearInterval(interval);
-                        bar.style.width = '100%';
-                        txt.textContent = '✅ ZIP siap! Mengunduh...';
-                        window.location.href = data.download_url;
-                        setTimeout(() => {
-                            wrap.classList.add('hidden');
-                            el.classList.remove('loading');
-                        }, 3000);
-                    } else if (data.status === 'failed') {
-                        clearInterval(interval);
-                        txt.textContent = '❌ Gagal: ' + (data.error || 'unknown');
+                    if (total === 0) {
+                        txt.textContent = '❌ Tidak ada file';
                         el.classList.remove('loading');
+                        return false;
                     }
-                }, 1500);
+
+                    const zip = new JSZip();
+                    let done = 0;
+                    let failed = 0;
+
+                    // 2. Download paralel (6 file bersamaan)
+                    const concurrency = 6;
+                    const queue = [...files];
+
+                    async function worker() {
+                        while (queue.length > 0) {
+                            const file = queue.shift();
+                            if (!file) break;
+
+                            try {
+                                const res = await fetch(file.url, {
+                                    mode: 'cors'
+                                });
+                                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+                                const blob = await res.blob();
+                                zip.file(file.name, blob);
+                            } catch (e) {
+                                failed++;
+                                console.warn('Gagal:', file.name, e.message);
+                            }
+
+                            done++;
+                            const percent = (done / total) * 100;
+                            bar.style.width = percent + '%';
+                            txt.textContent = `${done}/${total} file (${percent.toFixed(0)}%)`;
+                        }
+                    }
+
+                    await Promise.all(Array.from({
+                        length: concurrency
+                    }, () => worker()));
+
+                    // 3. Generate ZIP di browser
+                    txt.textContent = 'Membuat ZIP...';
+                    bar.style.width = '95%';
+
+                    const zipBlob = await zip.generateAsync({
+                            type: 'blob',
+                            compression: 'STORE'
+                        }, // STORE = tidak compress (media sudah compressed)
+                        (meta) => {
+                            const p = 95 + (meta.percent * 0.05);
+                            bar.style.width = p + '%';
+                            txt.textContent = `Membuat ZIP: ${meta.percent.toFixed(0)}%`;
+                        }
+                    );
+
+                    // 4. Trigger download
+                    const blobUrl = URL.createObjectURL(zipBlob);
+                    const a = document.createElement('a');
+                    a.href = blobUrl;
+                    a.download = `{{ Str::slug($category->nama_kategori) }}-${filter}-${Date.now()}.zip`;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    URL.revokeObjectURL(blobUrl);
+
+                    bar.style.width = '100%';
+                    txt.textContent = failed > 0 ?
+                        `✅ Selesai! (${failed} file gagal)` :
+                        `✅ Selesai! (${total} file)`;
+
+                    setTimeout(() => {
+                        wrap.classList.add('hidden');
+                        bar.style.width = '0%';
+                        el.classList.remove('loading');
+                    }, 5000);
+
+                } catch (err) {
+                    console.error(err);
+                    txt.textContent = '❌ ' + err.message;
+                    el.classList.remove('loading');
+                }
 
                 return false;
             };

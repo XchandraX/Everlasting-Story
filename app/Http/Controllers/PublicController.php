@@ -130,7 +130,7 @@ class PublicController extends Controller
         set_time_limit(0);
         @ini_set('memory_limit', '1024M');
 
-        $tempDir = sys_get_temp_dir() . '/everlasting_zip';
+        $tempDir = sys_get_temp_dir().'/everlasting_zip';
         if (! is_dir($tempDir)) {
             mkdir($tempDir, 0755, true);
         }
@@ -227,6 +227,45 @@ class PublicController extends Controller
             ->deleteFileAfterSend(true);
     }
 
+    // ============================================================
+    // DOWNLOAD LIST — Kirim daftar URL ke client (untuk JSZip)
+    // ============================================================
+
+    public function downloadList(Request $request, $id)
+    {
+        $category = Kategori::findOrFail($id);
+        $filter = $request->get('filter', 'image');
+
+        $media = Image::where('kategori_id', $id)
+            ->where('media_type', $filter)
+            ->latest()
+            ->get();
+
+        if ($media->isEmpty()) {
+            return response()->json(['error' => 'Tidak ada file'], 404);
+        }
+
+        $files = $media->map(function ($item, $idx) use ($filter) {
+            $url = $this->resolveMediaUrl($item->file_path);
+            $ext = pathinfo(parse_url($url, PHP_URL_PATH), PATHINFO_EXTENSION)
+                 ?: ($filter === 'video' ? 'mp4' : 'jpg');
+            $safe = Str::slug($item->title ?: 'file') ?: 'file';
+
+            return [
+                'url' => $url,
+                'name' => sprintf('%03d_%s.%s', $idx + 1, $safe, $ext),
+                'size' => (int) ($item->file_size ?? 0),
+            ];
+        });
+
+        return response()->json([
+            'category' => $category->nama_kategori,
+            'filter' => $filter,
+            'total' => $files->count(),
+            'total_size' => $files->sum('size'),
+            'files' => $files,
+        ]);
+    }
     // ============================================================
     // PARALLEL DOWNLOAD — Pool Guzzle
     // ============================================================
