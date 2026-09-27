@@ -11,6 +11,12 @@ Route::get('/', [PublicController::class, 'index'])->name('home');
 Route::get('/category', [PublicController::class, 'categories'])->name('categories.index');
 Route::get('/category/{id}', [PublicController::class, 'showCategory'])->name('categories.show');
 Route::get('/category/{id}/download', [PublicController::class, 'downloadCategory'])->name('categories.download');
+Route::post('/category/{id}/download/start', [PublicController::class, 'startDownload'])
+    ->name('categories.download.start');
+Route::get('/download/progress/{token}', [PublicController::class, 'downloadProgress'])
+    ->name('categories.download.progress');
+Route::get('/download/file/{token}', [PublicController::class, 'downloadFile'])
+    ->name('categories.download.file');
 Route::get('/search', [PublicController::class, 'search'])->name('search');
 
 // --- AUTH ROUTES ---

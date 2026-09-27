@@ -22,10 +22,22 @@
                     id="download-all-btn" class="download-btn" onclick="return confirmDownload(this)">
                     <i class="bi bi-cloud-arrow-down-fill"></i>
                     <span id="download-label">
-                        Download All {{ request('filter', 'image') === 'video' ? 'Videos' : 'Images' }}
+                        Download All {{ $filter === 'video' ? 'Videos' : 'Images' }}
+                    </span>
+                    <span class="text-[10px] opacity-80 font-mono">
+                        ({{ $totalCount }} file · {{ format_bytes($totalSize) }})
                     </span>
                     <i class="bi bi-file-earmark-zip-fill"></i>
                 </a>
+            </div>
+
+            <div id="download-progress" class="hidden mt-3 w-full max-w-md mx-auto">
+                <div class="w-full h-2 bg-slate-800 rounded-full overflow-hidden border border-cyan-500/30">
+                    <div id="download-progress-bar"
+                        class="h-full bg-gradient-to-r from-green-400 to-cyan-500 transition-all duration-150"
+                        style="width: 0%"></div>
+                </div>
+                <p id="download-progress-text" class="text-[10px] text-cyan-400 font-mono mt-2 text-center">0%</p>
             </div>
         </div>
 
@@ -67,9 +79,14 @@
                             class="text-[10px] md:text-xs font-bold text-gray-300 group-hover:text-cyan-400 transition-colors uppercase tracking-widest truncate">
                             {{ $image->title }}
                         </p>
-                        <p class="text-[8px] text-gray-600 mt-1 uppercase font-mono tracking-tighter">
-                            {{ $image->media_type == 'video' ? 'Asset_Video' : 'Asset_Rec' }}
-                        </p>
+                        <div class="flex items-center justify-between mt-1">
+                            <p class="text-[8px] text-gray-600 uppercase font-mono tracking-tighter">
+                                {{ $image->media_type == 'video' ? 'Asset_Video' : 'Asset_Rec' }}
+                            </p>
+                            <span class="text-[8px] text-cyan-500 font-mono font-bold">
+                                {{ format_bytes($image->file_size) }}
+                            </span>
+                        </div>
                     </div>
                 </div>
             @endforeach
@@ -359,19 +376,70 @@
                 btn.href = `{{ route('categories.download', $category->id) }}?filter=${filter}`;
                 label.textContent = `Download All ${filter === 'video' ? 'Videos' : 'Images'}`;
             }
-
-            window.confirmDownload = function(el) {
+            window.confirmDownload = async function(el) {
                 const filter = new URLSearchParams(window.location.search).get('filter') || 'image';
                 const ok = confirm(
-                    `Download semua ${filter === 'video' ? 'video' : 'foto'} dalam kategori ini?\n\n` +
-                    `Proses mungkin memakan waktu untuk file besar.`
-                );
-                if (ok) {
-                    el.classList.add('loading');
-                    setTimeout(() => el.classList.remove('loading'), 10000);
-                }
-                return ok;
+                    `Download semua ${filter === 'video' ? 'video' : 'foto'}?\n\nProses berjalan di background.`
+                    );
+                if (!ok) return false;
+
+                el.classList.add('loading');
+                const wrap = document.getElementById('download-progress');
+                const bar = document.getElementById('download-progress-bar');
+                const txt = document.getElementById('download-progress-text');
+                wrap.classList.remove('hidden');
+                txt.textContent = 'Memulai...';
+
+                // 1. Trigger job
+                const startUrl = `{{ route('categories.download.start', $category->id) }}`;
+                const {
+                    token,
+                    poll
+                } = await fetch(startUrl, {
+                    method: 'POST',
+                    headers: {
+                        'X-CSRF-TOKEN': '{{ csrf_token() }}',
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        filter
+                    })
+                }).then(r => r.json());
+
+                // 2. Poll
+                const interval = setInterval(async () => {
+                    const data = await fetch(poll).then(r => r.json());
+
+                    if (data.status === 'processing' || data.status === 'queued') {
+                        bar.style.width = (data.progress || 0) + '%';
+                        txt.textContent =
+                            `${data.progress || 0}% · ${data.current || 0}/${data.total || 0} file`;
+                    } else if (data.status === 'done') {
+                        clearInterval(interval);
+                        bar.style.width = '100%';
+                        txt.textContent = '✅ ZIP siap! Mengunduh...';
+                        window.location.href = data.download_url;
+                        setTimeout(() => {
+                            wrap.classList.add('hidden');
+                            el.classList.remove('loading');
+                        }, 3000);
+                    } else if (data.status === 'failed') {
+                        clearInterval(interval);
+                        txt.textContent = '❌ Gagal: ' + (data.error || 'unknown');
+                        el.classList.remove('loading');
+                    }
+                }, 1500);
+
+                return false;
             };
+
+            // Helper
+            function formatBytes(bytes) {
+                if (!bytes) return '0 B';
+                const u = ['B', 'KB', 'MB', 'GB'];
+                const i = Math.floor(Math.log(bytes) / Math.log(1024));
+                return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + u[i];
+            }
 
             syncDownloadButton();
         });

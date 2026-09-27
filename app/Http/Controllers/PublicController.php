@@ -2,13 +2,14 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\BuildCategoryZip;
 use App\Models\Image;
 use App\Models\Kategori;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use ZipArchive;
-
 
 class PublicController extends Controller
 {
@@ -45,7 +46,16 @@ class PublicController extends Controller
         }
         $images = $images->latest()->paginate(12)->withQueryString();
 
-        return view('public.category_show', compact('category', 'images', 'filter'));
+        $totalSize = Image::where('kategori_id', $id)
+            ->where('media_type', $filter)
+            ->sum('file_size');
+
+        $totalCount = Image::where('kategori_id', $id)
+            ->where('media_type', $filter)
+            ->count();
+
+        return view('public.category_show', compact('category', 'images', 'filter', 'totalSize', 'totalCount'));
+
     }
 
     // Fitur Pencarian Foto
@@ -61,7 +71,7 @@ class PublicController extends Controller
         return view('public.search_results', compact('images', 'keyword'));
     }
 
-        /**
+    /**
      * Download semua media di kategori tertentu sebagai ZIP
      */
     public function downloadCategory(Request $request, $id)
@@ -70,7 +80,7 @@ class PublicController extends Controller
         @ini_set('memory_limit', '512M');
 
         $category = Kategori::findOrFail($id);
-        $filter   = $request->get('filter', 'image'); // image | video
+        $filter = $request->get('filter', 'image'); // image | video
 
         $media = Image::where('kategori_id', $id)
             ->where('media_type', $filter)
@@ -83,23 +93,23 @@ class PublicController extends Controller
 
         // Folder temp
         $tempDir = storage_path('app/temp');
-        if (!is_dir($tempDir)) {
+        if (! is_dir($tempDir)) {
             mkdir($tempDir, 0755, true);
         }
 
         $zipName = Str::slug($category->nama_kategori)
-                 . '-' . $filter
-                 . '-' . now()->format('Ymd_His')
-                 . '.zip';
-        $zipPath = $tempDir . DIRECTORY_SEPARATOR . $zipName;
+                 .'-'.$filter
+                 .'-'.now()->format('Ymd_His')
+                 .'.zip';
+        $zipPath = $tempDir.DIRECTORY_SEPARATOR.$zipName;
 
-        $zip = new ZipArchive();
+        $zip = new ZipArchive;
         if ($zip->open($zipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
             abort(500, 'Gagal membuat file ZIP.');
         }
 
         $tempFiles = [];
-        $counter   = 1;
+        $counter = 1;
 
         foreach ($media as $item) {
             $tmpFile = null;
@@ -110,20 +120,25 @@ class PublicController extends Controller
                 $tmpFile = tempnam(sys_get_temp_dir(), 'media_');
 
                 $response = Http::timeout(300)->get($url);
-                if (!$response->successful()) {
+                if (! $response->successful()) {
                     @unlink($tmpFile);
+
                     continue;
                 }
-                file_put_contents($tmpFile, $response->body());
+                if (! $response->successful()) {
+                    @unlink($tmpFile);
+
+                    continue;
+                }
 
                 // Ekstensi file
                 $ext = pathinfo(parse_url($url, PHP_URL_PATH), PATHINFO_EXTENSION);
-                if (!$ext) {
+                if (! $ext) {
                     $ext = $filter === 'video' ? 'mp4' : 'jpg';
                 }
 
                 $safeTitle = Str::slug($item->title ?: 'file') ?: 'file';
-                $fileName  = sprintf('%03d_%s.%s', $counter, $safeTitle, $ext);
+                $fileName = sprintf('%03d_%s.%s', $counter, $safeTitle, $ext);
 
                 $zip->addFile($tmpFile, $fileName);
                 $tempFiles[] = $tmpFile;
@@ -132,6 +147,7 @@ class PublicController extends Controller
                 if ($tmpFile && file_exists($tmpFile)) {
                     @unlink($tmpFile);
                 }
+
                 continue;
             }
         }
@@ -156,7 +172,57 @@ class PublicController extends Controller
         if (preg_match('/^https?:\/\//i', $path)) {
             return $path;
         }
+
         // Kalau path lokal, gunakan asset storage
-        return asset('storage/' . ltrim($path, '/'));
+        return asset('storage/'.ltrim($path, '/'));
+    }
+
+    public function startDownload(Request $request, $id)
+    {
+        $filter = $request->get('filter', 'image');
+        $token = Str::random(32);
+
+        Cache::put("zip:{$token}", [
+            'status' => 'queued',
+            'progress' => 0,
+            'current' => 0,
+            'total' => 0,
+        ], now()->addHours(2));
+
+        BuildCategoryZip::dispatch($id, $filter, $token);
+
+        return response()->json([
+            'token' => $token,
+            'poll' => route('categories.download.progress', $token),
+        ]);
+    }
+
+    public function downloadProgress($token)
+    {
+        $data = Cache::get("zip:{$token}");
+        if (! $data) {
+            return response()->json(['status' => 'not_found'], 404);
+        }
+
+        if ($data['status'] === 'done') {
+            $data['download_url'] = route('categories.download.file', $token);
+        }
+
+        return response()->json($data);
+    }
+
+    public function downloadFile($token)
+    {
+        $data = Cache::get("zip:{$token}");
+        if (! $data || $data['status'] !== 'done') {
+            abort(404);
+        }
+        if (! file_exists($data['path'])) {
+            abort(404, 'File sudah dihapus.');
+        }
+
+        return response()
+            ->download($data['path'], $data['filename'])
+            ->deleteFileAfterSend(true);
     }
 }
