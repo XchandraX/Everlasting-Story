@@ -236,16 +236,24 @@ class PublicController extends Controller
         $category = Kategori::findOrFail($id);
         $filter = $request->get('filter', 'image');
 
-        $media = Image::where('kategori_id', $id)
+        $query = Image::where('kategori_id', $id)
             ->where('media_type', $filter)
-            ->latest()
-            ->get();
+            ->latest();
+
+        // ✅ KUNCI: kalau ada parameter page, batasi ke halaman itu saja
+        if ($request->has('page')) {
+            $perPage = 12;  // harus SAMA dengan showCategory()
+            $page = (int) $request->get('page', 1);
+            $query->forPage($page, $perPage);
+        }
+
+        $media = $query->get();
 
         if ($media->isEmpty()) {
             return response()->json(['error' => 'Tidak ada file'], 404);
         }
 
-        $files = $media->map(function ($item, $idx) use ($filter) {
+        $files = $media->values()->map(function ($item, $idx) use ($filter) {
             $url = $this->resolveMediaUrl($item->file_path);
             $ext = pathinfo(parse_url($url, PHP_URL_PATH), PATHINFO_EXTENSION)
                  ?: ($filter === 'video' ? 'mp4' : 'jpg');
@@ -261,6 +269,7 @@ class PublicController extends Controller
         return response()->json([
             'category' => $category->nama_kategori,
             'filter' => $filter,
+            'page' => $request->get('page'),
             'total' => $files->count(),
             'total_size' => $files->sum('size'),
             'files' => $files,
