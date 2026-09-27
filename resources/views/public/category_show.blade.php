@@ -1,7 +1,4 @@
 @extends('layouts.main')
-@push('scripts')
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-@endpush
 @section('content')
     <div class="container mx-auto px-4 sm:px-6 py-8 md:py-12">
         <div class="mb-8 text-center">
@@ -159,6 +156,7 @@
             </p>
         </div>
     </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
     <style>
         .download-btn {
@@ -283,10 +281,10 @@
 
     <script>
         document.addEventListener('DOMContentLoaded', function() {
-            // Inisialisasi GLightbox
-            // Tandai bahwa halaman ini sudah handle sendiri
+            // ============================================================
+            // GLIGHTBOX
+            // ============================================================
             window.__glightboxInitialized = true;
-
             const lightbox = GLightbox({
                 selector: '.glightbox',
                 touchNavigation: true,
@@ -311,11 +309,13 @@
                 }
             });
 
-            const viewGrid = document.getElementById('view-grid');
+            // ============================================================
+            // FILTER
+            // ============================================================
             const btnImages = document.getElementById('filter-images');
             const btnVideos = document.getElementById('filter-videos');
             const urlParams = new URLSearchParams(window.location.search);
-            let currentFilter = urlParams.get('filter') || 'image';
+            const currentFilter = urlParams.get('filter') || 'image';
 
             function updateFilterUI() {
                 if (currentFilter === 'image') {
@@ -331,22 +331,17 @@
                 if (filter === currentFilter) return;
                 let url = new URL(window.location.href);
                 url.searchParams.set('filter', filter);
-                url.searchParams.delete('page'); // reset ke halaman 1
+                url.searchParams.delete('page');
                 window.location.href = url.toString();
             }
 
-            btnImages.addEventListener('click', () => {
-                applyFilter('image');
-                syncDownloadButton();
-            });
-            btnVideos.addEventListener('click', () => {
-                applyFilter('video');
-                syncDownloadButton();
-            });
-            // Set active class sesuai URL awal
+            btnImages.addEventListener('click', () => applyFilter('image'));
+            btnVideos.addEventListener('click', () => applyFilter('video'));
             updateFilterUI();
 
-            // ========== FUNGSI JUMP TO PAGE ==========
+            // ============================================================
+            // JUMP TO PAGE
+            // ============================================================
             const pageInput = document.getElementById('page-input');
             const goToPageBtn = document.getElementById('go-to-page');
 
@@ -357,7 +352,6 @@
                 if (targetPage < 1) targetPage = 1;
                 if (targetPage > maxPage) targetPage = maxPage;
 
-                const currentFilter = new URLSearchParams(window.location.search).get('filter') || 'image';
                 let url = new URL(window.location.href);
                 url.searchParams.set('page', targetPage);
                 url.searchParams.set('filter', currentFilter);
@@ -369,7 +363,9 @@
                 if (e.key === 'Enter') goToPage();
             });
 
-            // Pastikan semua link pagination membawa parameter filter
+            // ============================================================
+            // PAGINATION FILTER
+            // ============================================================
             document.querySelectorAll('.pagination-wrapper a').forEach(link => {
                 let href = link.getAttribute('href');
                 if (href && !href.includes('filter=')) {
@@ -377,141 +373,135 @@
                     link.href = href + separator + 'filter=' + currentFilter;
                 }
             });
+        });
 
-            // ========== DOWNLOAD ALL ==========
-            function syncDownloadButton() {
-                const filter = new URLSearchParams(window.location.search).get('filter') || 'image';
-                const btn = document.getElementById('download-all-btn');
-                const label = document.getElementById('download-label');
-                if (!btn || !label) return;
+        // ============================================================
+        // CLIENT-SIDE ZIP DOWNLOAD
+        // ============================================================
 
-                btn.href = `{{ route('categories.download', $category->id) }}?filter=${filter}`;
-                label.textContent = `Download All ${filter === 'video' ? 'Videos' : 'Images'}`;
-            }
-            window.confirmDownload = async function(el) {
-                const filter = new URLSearchParams(window.location.search).get('filter') || 'image';
-                const ok = confirm(
-                    `Download semua ${filter === 'video' ? 'video' : 'foto'} di browser?\n\n` +
-                    `File akan di-ZIP di browser, bukan di server.\n` +
-                    `Jangan tutup tab ini sampai selesai.`
-                );
-                if (!ok) return false;
+        async function downloadPageClient(filter, page) {
+            const ok = confirm(
+                `Download ${filter === 'video' ? 'video' : 'foto'} di halaman ${page}?\n\n` +
+                `ZIP dibuat di browser, bukan di server.`
+            );
+            if (!ok) return;
 
-                el.classList.add('loading');
-                const wrap = document.getElementById('download-progress');
-                const bar = document.getElementById('download-progress-bar');
-                const txt = document.getElementById('download-progress-text');
-                wrap.classList.remove('hidden');
-                txt.textContent = 'Mengambil daftar file...';
+            const url = `{{ route('categories.download.list', $category->id) }}?filter=${filter}&page=${page}`;
+            await runClientZip(url, `Halaman-${page}`);
+        }
 
-                try {
-                    // 1. Ambil daftar URL dari server (JSON kecil)
-                    const listUrl =
-                        `{{ route('categories.download.list', $category->id) }}?filter=${filter}`;
-                    const listRes = await fetch(listUrl);
-                    if (!listRes.ok) throw new Error('Gagal ambil daftar file');
+        async function downloadAllClient(filter) {
+            const ok = confirm(
+                `Download semua ${filter === 'video' ? 'video' : 'foto'}?\n\n` +
+                `ZIP dibuat di browser, bukan di server.\n` +
+                `Jangan tutup tab ini sampai selesai.`
+            );
+            if (!ok) return;
 
-                    const data = await listRes.json();
-                    const files = data.files;
-                    const total = files.length;
+            const url = `{{ route('categories.download.list', $category->id) }}?filter=${filter}`;
+            await runClientZip(url, 'Semua');
+        }
 
-                    if (total === 0) {
-                        txt.textContent = '❌ Tidak ada file';
-                        el.classList.remove('loading');
-                        return false;
-                    }
+        async function runClientZip(listUrl, label) {
+            const el = document.getElementById('download-all-btn');
+            const wrap = document.getElementById('download-progress');
+            const bar = document.getElementById('download-progress-bar');
+            const txt = document.getElementById('download-progress-text');
 
-                    const zip = new JSZip();
-                    let done = 0;
-                    let failed = 0;
+            if (el) el.classList.add('loading');
+            wrap.classList.remove('hidden');
+            txt.textContent = 'Mengambil daftar file...';
+            bar.style.width = '0%';
 
-                    // 2. Download paralel (6 file bersamaan)
-                    const concurrency = 6;
-                    const queue = [...files];
+            try {
+                const listRes = await fetch(listUrl);
+                if (!listRes.ok) throw new Error(`Gagal ambil daftar (HTTP ${listRes.status})`);
 
-                    async function worker() {
-                        while (queue.length > 0) {
-                            const file = queue.shift();
-                            if (!file) break;
+                const data = await listRes.json();
+                if (data.error) throw new Error(data.error);
 
-                            try {
-                                const res = await fetch(file.url, {
-                                    mode: 'cors'
-                                });
-                                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const files = data.files || [];
+                const total = files.length;
 
-                                const blob = await res.blob();
-                                zip.file(file.name, blob);
-                            } catch (e) {
-                                failed++;
-                                console.warn('Gagal:', file.name, e.message);
-                            }
-
-                            done++;
-                            const percent = (done / total) * 100;
-                            bar.style.width = percent + '%';
-                            txt.textContent = `${done}/${total} file (${percent.toFixed(0)}%)`;
-                        }
-                    }
-
-                    await Promise.all(Array.from({
-                        length: concurrency
-                    }, () => worker()));
-
-                    // 3. Generate ZIP di browser
-                    txt.textContent = 'Membuat ZIP...';
-                    bar.style.width = '95%';
-
-                    const zipBlob = await zip.generateAsync({
-                            type: 'blob',
-                            compression: 'STORE'
-                        }, // STORE = tidak compress (media sudah compressed)
-                        (meta) => {
-                            const p = 95 + (meta.percent * 0.05);
-                            bar.style.width = p + '%';
-                            txt.textContent = `Membuat ZIP: ${meta.percent.toFixed(0)}%`;
-                        }
-                    );
-
-                    // 4. Trigger download
-                    const blobUrl = URL.createObjectURL(zipBlob);
-                    const a = document.createElement('a');
-                    a.href = blobUrl;
-                    a.download = `{{ Str::slug($category->nama_kategori) }}-${filter}-${Date.now()}.zip`;
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                    URL.revokeObjectURL(blobUrl);
-
-                    bar.style.width = '100%';
-                    txt.textContent = failed > 0 ?
-                        `✅ Selesai! (${failed} file gagal)` :
-                        `✅ Selesai! (${total} file)`;
-
-                    setTimeout(() => {
-                        wrap.classList.add('hidden');
-                        bar.style.width = '0%';
-                        el.classList.remove('loading');
-                    }, 5000);
-
-                } catch (err) {
-                    console.error(err);
-                    txt.textContent = '❌ ' + err.message;
-                    el.classList.remove('loading');
+                if (total === 0) {
+                    txt.textContent = '❌ Tidak ada file';
+                    if (el) el.classList.remove('loading');
+                    return;
                 }
 
-                return false;
-            };
+                const zip = new JSZip();
+                let done = 0;
+                let failed = 0;
+                const queue = [...files];
+                const concurrency = 6;
 
-            // Helper
-            function formatBytes(bytes) {
-                if (!bytes) return '0 B';
-                const u = ['B', 'KB', 'MB', 'GB'];
-                const i = Math.floor(Math.log(bytes) / Math.log(1024));
-                return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + u[i];
+                async function worker() {
+                    while (queue.length > 0) {
+                        const file = queue.shift();
+                        if (!file) break;
+
+                        try {
+                            const res = await fetch(file.url, {
+                                mode: 'cors'
+                            });
+                            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                            const blob = await res.blob();
+                            zip.file(file.name, blob);
+                        } catch (e) {
+                            failed++;
+                            console.warn('Gagal:', file.name, e.message);
+                        }
+
+                        done++;
+                        const percent = (done / total) * 90;
+                        bar.style.width = percent + '%';
+                        txt.textContent = `${done}/${total} file (${percent.toFixed(0)}%)`;
+                    }
+                }
+
+                await Promise.all(Array.from({
+                    length: concurrency
+                }, () => worker()));
+
+                txt.textContent = 'Membuat ZIP...';
+                bar.style.width = '92%';
+
+                const zipBlob = await zip.generateAsync({
+                        type: 'blob',
+                        compression: 'STORE'
+                    },
+                    (meta) => {
+                        const p = 92 + (meta.percent * 0.08);
+                        bar.style.width = p + '%';
+                        txt.textContent = `Membuat ZIP: ${meta.percent.toFixed(0)}%`;
+                    }
+                );
+
+                const blobUrl = URL.createObjectURL(zipBlob);
+                const a = document.createElement('a');
+                a.href = blobUrl;
+                a.download = `{{ Str::slug($category->nama_kategori) }}-${label}-${Date.now()}.zip`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(blobUrl);
+
+                bar.style.width = '100%';
+                txt.textContent = failed > 0 ?
+                    `✅ Selesai! (${failed} file gagal)` :
+                    `✅ Selesai! (${total} file)`;
+
+                setTimeout(() => {
+                    wrap.classList.add('hidden');
+                    bar.style.width = '0%';
+                    if (el) el.classList.remove('loading');
+                }, 5000);
+
+            } catch (err) {
+                console.error(err);
+                txt.textContent = '❌ ' + err.message;
+                if (el) el.classList.remove('loading');
             }
-
-            syncDownloadButton();
-        });
+        }
     </script>
 @endsection
