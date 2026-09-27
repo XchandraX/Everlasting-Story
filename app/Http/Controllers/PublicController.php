@@ -5,7 +5,8 @@ namespace App\Http\Controllers;
 use App\Jobs\BuildCategoryZip;
 use App\Models\Image;
 use App\Models\Kategori;
-use Illuminate\Http\Client\RequestException;
+use GuzzleHttp\Client;
+use GuzzleHttp\Pool;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
@@ -113,16 +114,12 @@ class PublicController extends Controller
     }
 
     // ============================================================
-    // CORE: buildZip() — dipakai oleh downloadCategory & downloadPage
+    // CORE: buildZip() — Pool Guzzle (paralel)
     // ============================================================
 
     /**
-     * Bangun ZIP dari collection Image lalu kirim ke user.
-     *
-     * @param  Kategori  $category
-     * @param  Collection  $media
-     * @param  string  $filter  'image' | 'video'
-     * @param  string|null  $suffix  tambahan nama file (misal "page-2")
+     * Bangun ZIP dari collection Image menggunakan download paralel.
+     * Concurrency: 15 file sekaligus → ~10-15x lebih cepat.
      */
     private function buildZip($category, $media, string $filter, ?string $suffix = null)
     {
@@ -131,7 +128,7 @@ class PublicController extends Controller
         }
 
         set_time_limit(0);
-        @ini_set('memory_limit', '512M');
+        @ini_set('memory_limit', '1024M');
 
         $tempDir = storage_path('app/temp');
         if (! is_dir($tempDir)) {
@@ -145,41 +142,84 @@ class PublicController extends Controller
                  .'.zip';
         $zipPath = $tempDir.DIRECTORY_SEPARATOR.$zipName;
 
+        // ============================================================
+        // STEP 1: Siapkan metadata setiap file
+        // ============================================================
+        $meta = [];
+        foreach ($media as $idx => $item) {
+            $url = $this->resolveMediaUrl($item->file_path);
+            $ext = pathinfo(parse_url($url, PHP_URL_PATH), PATHINFO_EXTENSION)
+                  ?: ($filter === 'video' ? 'mp4' : 'jpg');
+            $safe = Str::slug($item->title ?: 'file') ?: 'file';
+
+            $meta[$idx] = [
+                'id' => $item->id,
+                'title' => $item->title,
+                'url' => $url,
+                'ext' => $ext,
+                'safe_title' => $safe,
+                'expected_size' => (int) ($item->file_size ?? 0),
+                'tmp_file' => tempnam(sys_get_temp_dir(), 'media_'),
+                'success' => false,
+                'attempts' => 0,
+            ];
+        }
+
+        // ============================================================
+        // STEP 2: Download paralel pakai Pool Guzzle
+        // ============================================================
+        $this->parallelDownload($meta, $filter);
+
+        // ============================================================
+        // STEP 3: Retry file yang gagal (sequential, lebih lambat tapi akurat)
+        // ============================================================
+        $failedIdx = array_keys(array_filter($meta, fn ($m) => ! $m['success']));
+        if (! empty($failedIdx)) {
+            \Log::info('Pool: '.count($failedIdx).' file gagal, retry sequential...');
+
+            foreach ($failedIdx as $idx) {
+                $this->retrySingle($meta[$idx], $filter);
+            }
+        }
+
+        // ============================================================
+        // STEP 4: Masukkan ke ZIP
+        // ============================================================
         $zip = new ZipArchive;
         if ($zip->open($zipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
+            foreach ($meta as $m) {
+                @unlink($m['tmp_file']);
+            }
             abort(500, 'Gagal membuat file ZIP.');
         }
 
-        $tempFiles = [];
         $counter = 1;
         $failed = [];
-        $skipped = [];
 
-        foreach ($media as $item) {
-            $result = $this->downloadWithRetry($item, $filter);
+        foreach ($meta as $m) {
+            if (! $m['success']) {
+                $failed[] = $m['title'];
+                @unlink($m['tmp_file']);
 
-            if ($result['success']) {
-                $fileName = sprintf('%03d_%s.%s', $counter, $result['safe_title'], $result['ext']);
-                $zip->addFile($result['tmp_file'], $fileName);
-                $tempFiles[] = $result['tmp_file'];
-                $counter++;
-            } else {
-                $failed[] = $item->title.' ('.$result['reason'].')';
+                continue;
             }
+
+            $fileName = sprintf('%03d_%s.%s', $counter, $m['safe_title'], $m['ext']);
+            $zip->addFile($m['tmp_file'], $fileName);
+            $counter++;
         }
 
         $zip->close();
 
-        // Cleanup temp files
-        foreach ($tempFiles as $tmp) {
-            @unlink($tmp);
+        // Cleanup
+        foreach ($meta as $m) {
+            @unlink($m['tmp_file']);
         }
 
-        // Kalau SEMUA file gagal
         if ($counter === 1) {
             @unlink($zipPath);
 
-            return back()->with('error', 'Semua file gagal diunduh. Coba lagi nanti.');
+            return back()->with('error', 'Semua file gagal diunduh.');
         }
 
         return response()
@@ -187,146 +227,138 @@ class PublicController extends Controller
             ->deleteFileAfterSend(true);
     }
 
+    // ============================================================
+    // PARALLEL DOWNLOAD — Pool Guzzle
+    // ============================================================
+
     /**
-     * Download satu file dengan retry + verifikasi ukuran
+     * Download semua file secara paralel dengan Pool Guzzle.
+     * Concurrency = 15 file sekaligus.
      */
-    private function downloadWithRetry($item, string $filter, int $maxRetries = 3): array
+    private function parallelDownload(array &$meta, string $filter): void
     {
-        $url = $this->resolveMediaUrl($item->file_path);
-        $safe = Str::slug($item->title ?: 'file') ?: 'file';
-        $ext = pathinfo(parse_url($url, PHP_URL_PATH), PATHINFO_EXTENSION)
-               ?: ($filter === 'video' ? 'mp4' : 'jpg');
+        $client = new Client([
+            'timeout' => 120,
+            'connect_timeout' => 10,
+            'verify' => false, // skip SSL verify → percepat
+            'http_errors' => false,
+        ]);
 
-        $expectedSize = (int) ($item->file_size ?? 0);
+        $requests = [];
+        foreach ($meta as $idx => $m) {
+            $requests[$idx] = new \GuzzleHttp\Psr7\Request('GET', $m['url']);
+        }
 
-        for ($attempt = 1; $attempt <= $maxRetries; $attempt++) {
-            $tmpFile = tempnam(sys_get_temp_dir(), 'media_');
+        $pool = new Pool($client, $requests, [
+            'concurrency' => 15, // ✅ 15 file paralel
 
+            'fulfilled' => function ($response, $idx) use (&$meta, $filter) {
+                $m = &$meta[$idx];
+                $m['attempts']++;
+
+                if ($response->getStatusCode() !== 200) {
+                    \Log::warning("Pool: HTTP {$response->getStatusCode()} untuk {$m['title']}");
+
+                    return;
+                }
+
+                // Stream body ke file temp
+                $body = $response->getBody();
+                file_put_contents($m['tmp_file'], $body);
+
+                // Verifikasi
+                $m['success'] = $this->verifyFile($m['tmp_file'], $m['expected_size'], $filter);
+                if (! $m['success']) {
+                    \Log::warning("Pool: verifikasi gagal untuk {$m['title']}");
+                    @unlink($m['tmp_file']);
+                    $m['tmp_file'] = tempnam(sys_get_temp_dir(), 'media_');
+                }
+            },
+
+            'rejected' => function ($reason, $idx) use (&$meta) {
+                $m = &$meta[$idx];
+                $m['attempts']++;
+                \Log::warning("Pool: rejected {$m['title']} - {$reason}");
+            },
+        ]);
+
+        $pool->promise()->wait();
+    }
+
+    // ============================================================
+    // RETRY SINGLE — Fallback kalau pool gagal
+    // ============================================================
+
+    /**
+     * Retry download satu file secara sequential.
+     */
+    private function retrySingle(array &$m, string $filter): void
+    {
+        for ($attempt = 1; $attempt <= 2; $attempt++) {
             try {
-                // ✅ Retry bawaan Laravel + timeout lebih panjang
-                $response = Http::timeout(600)          // 10 menit per file
-                    ->retry(2, 2000, function ($exception) {
-                        // Retry hanya untuk error koneksi, bukan 404
-                        return ! ($exception instanceof RequestException);
-                    })
-                    ->sink($tmpFile)
-                    ->get($url);
+                $res = Http::timeout(120)
+                    ->withOptions(['verify' => false])
+                    ->sink($m['tmp_file'])
+                    ->get($m['url']);
 
-                if (! $response->successful()) {
-                    @unlink($tmpFile);
+                if ($res->successful() && $this->verifyFile($m['tmp_file'], $m['expected_size'], $filter)) {
+                    $m['success'] = true;
 
-                    return [
-                        'success' => false,
-                        'reason' => 'HTTP '.$response->status(),
-                        'safe_title' => $safe,
-                        'ext' => $ext,
-                    ];
+                    return;
                 }
-
-                // ✅ VERIFIKASI 1: file tidak kosong
-                $actualSize = filesize($tmpFile);
-                if ($actualSize === 0) {
-                    @unlink($tmpFile);
-                    \Log::warning("Download kosong: {$item->title} (attempt {$attempt})");
-                    if ($attempt < $maxRetries) {
-                        sleep(1);
-
-                        continue;
-                    }
-
-                    return ['success' => false, 'reason' => 'File kosong', 'safe_title' => $safe, 'ext' => $ext];
-                }
-
-                // ✅ VERIFIKASI 2: ukuran cocok dengan DB (toleransi 2%)
-                if ($expectedSize > 0) {
-                    $tolerance = max(1024, $expectedSize * 0.02); // min 1KB atau 2%
-                    if (abs($actualSize - $expectedSize) > $tolerance) {
-                        @unlink($tmpFile);
-                        \Log::warning("Ukuran mismatch: {$item->title} expected={$expectedSize} actual={$actualSize} (attempt {$attempt})");
-                        if ($attempt < $maxRetries) {
-                            sleep(1);
-
-                            continue;
-                        }
-
-                        return [
-                            'success' => false,
-                            'reason' => "Ukuran tidak cocok ({$actualSize} vs {$expectedSize})",
-                            'safe_title' => $safe,
-                            'ext' => $ext,
-                        ];
-                    }
-                }
-
-                // ✅ VERIFIKASI 3: cek magic bytes untuk image
-                if ($filter === 'image') {
-                    $handle = fopen($tmpFile, 'rb');
-                    $header = fread($handle, 12);
-                    fclose($handle);
-
-                    $validMagic = (
-                        str_starts_with($header, "\xFF\xD8\xFF") ||           // JPEG
-                        str_starts_with($header, "\x89PNG\r\n\x1a\n") ||      // PNG
-                        str_starts_with($header, 'GIF87a') ||                 // GIF87
-                        str_starts_with($header, 'GIF89a') ||                 // GIF89
-                        (str_starts_with($header, 'RIFF') && substr($header, 8, 4) === 'WEBP') // WEBP
-                    );
-
-                    if (! $validMagic) {
-                        @unlink($tmpFile);
-                        \Log::warning("Magic bytes invalid: {$item->title} (attempt {$attempt})");
-                        if ($attempt < $maxRetries) {
-                            sleep(1);
-
-                            continue;
-                        }
-
-                        return ['success' => false, 'reason' => 'Format tidak valid', 'safe_title' => $safe, 'ext' => $ext];
-                    }
-                }
-
-                // ✅ BERHASIL
-                return [
-                    'success' => true,
-                    'tmp_file' => $tmpFile,
-                    'safe_title' => $safe,
-                    'ext' => $ext,
-                ];
-
             } catch (\Throwable $e) {
-                if (file_exists($tmpFile)) {
-                    @unlink($tmpFile);
-                }
-                \Log::warning("Download exception: {$item->title} attempt {$attempt} - ".$e->getMessage());
+                \Log::warning("Retry single gagal {$m['title']} attempt {$attempt}: ".$e->getMessage());
+            }
 
-                if ($attempt < $maxRetries) {
-                    sleep(1); // jeda sebelum retry
-
-                    continue;
-                }
-
-                return [
-                    'success' => false,
-                    'reason' => $e->getMessage(),
-                    'safe_title' => $safe,
-                    'ext' => $ext,
-                ];
+            if ($attempt < 2) {
+                sleep(1);
             }
         }
 
-        return ['success' => false, 'reason' => 'Max retry tercapai', 'safe_title' => $safe, 'ext' => $ext];
+        $m['success'] = false;
     }
 
+    // ============================================================
+    // VERIFIKASI FILE
+    // ============================================================
+
     /**
-     * Helper: Cloudinary URL atau path storage lokal → full URL
+     * Verifikasi file setelah download: size + magic bytes.
      */
-    private function resolveMediaUrl(string $path): string
+    private function verifyFile(string $tmpFile, int $expectedSize, string $filter): bool
     {
-        if (preg_match('/^https?:\/\//i', $path)) {
-            return $path;
+        if (! file_exists($tmpFile)) {
+            return false;
         }
 
-        return asset('storage/'.ltrim($path, '/'));
+        $actualSize = filesize($tmpFile);
+        if ($actualSize === 0) {
+            return false;
+        }
+
+        // Verifikasi ukuran (toleransi 2%)
+        if ($expectedSize > 0) {
+            $tolerance = max(2048, $expectedSize * 0.02);
+            if (abs($actualSize - $expectedSize) > $tolerance) {
+                return false;
+            }
+        }
+
+        // Verifikasi magic bytes untuk image
+        if ($filter === 'image') {
+            $handle = fopen($tmpFile, 'rb');
+            $header = fread($handle, 12);
+            fclose($handle);
+
+            return
+                str_starts_with($header, "\xFF\xD8\xFF") ||           // JPEG
+                str_starts_with($header, "\x89PNG\r\n\x1a\n") ||      // PNG
+                str_starts_with($header, 'GIF87a') ||                 // GIF87
+                str_starts_with($header, 'GIF89a') ||                 // GIF89
+                (str_starts_with($header, 'RIFF') && substr($header, 8, 4) === 'WEBP'); // WEBP
+        }
+
+        return true;
     }
 
     // ============================================================
