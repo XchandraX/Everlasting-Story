@@ -231,6 +231,25 @@ class PublicController extends Controller
     // PARALLEL DOWNLOAD — Pool Guzzle
     // ============================================================
 
+    // ============================================================
+    // HELPER: resolveMediaUrl
+    // ============================================================
+
+    /**
+     * Konversi path file → full URL.
+     * Support Cloudinary (https://...) atau storage lokal.
+     */
+    private function resolveMediaUrl(string $path): string
+    {
+        // Kalau sudah full URL (http/https), pakai langsung
+        if (preg_match('/^https?:\/\//i', $path)) {
+            return $path;
+        }
+
+        // Kalau path lokal, gunakan asset storage
+        return asset('storage/'.ltrim($path, '/'));
+    }
+
     /**
      * Download semua file secara paralel dengan Pool Guzzle.
      * Concurrency = 15 file sekaligus.
@@ -238,9 +257,9 @@ class PublicController extends Controller
     private function parallelDownload(array &$meta, string $filter): void
     {
         $client = new Client([
-            'timeout' => 120,
-            'connect_timeout' => 10,
-            'verify' => false, // skip SSL verify → percepat
+            'timeout' => 180,
+            'connect_timeout' => 30,
+            'verify' => false,
             'http_errors' => false,
         ]);
 
@@ -250,7 +269,7 @@ class PublicController extends Controller
         }
 
         $pool = new Pool($client, $requests, [
-            'concurrency' => 15, // ✅ 15 file paralel
+            'concurrency' => 4,           // ✅ turunkan
 
             'fulfilled' => function ($response, $idx) use (&$meta, $filter) {
                 $m = &$meta[$idx];
@@ -262,11 +281,9 @@ class PublicController extends Controller
                     return;
                 }
 
-                // Stream body ke file temp
                 $body = $response->getBody();
                 file_put_contents($m['tmp_file'], $body);
 
-                // Verifikasi
                 $m['success'] = $this->verifyFile($m['tmp_file'], $m['expected_size'], $filter);
                 if (! $m['success']) {
                     \Log::warning("Pool: verifikasi gagal untuk {$m['title']}");
@@ -294,30 +311,33 @@ class PublicController extends Controller
      */
     private function retrySingle(array &$m, string $filter): void
     {
-        for ($attempt = 1; $attempt <= 2; $attempt++) {
+        $delays = [2, 5, 10]; // detik jeda antar retry
+
+        foreach ($delays as $i => $delay) {
             try {
-                $res = Http::timeout(120)
+                $res = Http::timeout(180)
+                    ->connectTimeout(30)                          // ✅ tambah
                     ->withOptions(['verify' => false])
                     ->sink($m['tmp_file'])
                     ->get($m['url']);
 
                 if ($res->successful() && $this->verifyFile($m['tmp_file'], $m['expected_size'], $filter)) {
                     $m['success'] = true;
+                    \Log::info("Retry single BERHASIL {$m['title']} (attempt ".($i + 1).')');
 
                     return;
                 }
             } catch (\Throwable $e) {
-                \Log::warning("Retry single gagal {$m['title']} attempt {$attempt}: ".$e->getMessage());
+                \Log::warning("Retry single gagal {$m['title']} attempt ".($i + 1).': '.$e->getMessage());
             }
 
-            if ($attempt < 2) {
-                sleep(1);
+            if ($i < count($delays) - 1) {
+                sleep($delay);
             }
         }
 
         $m['success'] = false;
     }
-
     // ============================================================
     // VERIFIKASI FILE
     // ============================================================
